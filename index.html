@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>런닝웹</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="top-bar">
+        <div>
+          <p class="eyebrow">Running Web</p>
+          <h1>런닝웹</h1>
+        </div>
+        <button class="icon-button" type="button" data-install-button aria-label="앱 설치" hidden>
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 3v12" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 21h14" />
+          </svg>
+        </button>
+      </header>
+
+      <section class="install-panel" data-install-panel hidden>
+        <div>
+          <strong>핸드폰 설치 준비 완료</strong>
+          <p data-install-message>브라우저 메뉴에서 홈 화면에 추가할 수 있습니다.</p>
+        </div>
+        <button type="button" data-install-action>설치</button>
+      </section>
+
+      <section class="screen is-active" id="run-screen" aria-labelledby="run-tab">
+        <div class="run-status">
+          <div>
+            <span>오늘의 러닝</span>
+            <strong data-run-status>준비 완료</strong>
+          </div>
+          <span class="status-dot" data-status-dot aria-label="준비"></span>
+        </div>
+
+        <div class="metric-hero">
+          <span>거리</span>
+          <strong data-distance>0.00 km</strong>
+          <small data-run-hint>시작 버튼을 누르면 시간이 기록됩니다</small>
+        </div>
+
+        <div class="metrics-grid" aria-label="러닝 요약">
+          <article>
+            <span>시간</span>
+            <strong data-elapsed>00:00</strong>
+          </article>
+          <article>
+            <span>페이스</span>
+            <strong data-pace>--'--"</strong>
+          </article>
+          <article>
+            <span>칼로리</span>
+            <strong data-calories>0 kcal</strong>
+          </article>
+          <article>
+            <span>GPS</span>
+            <strong data-gps>대기</strong>
+          </article>
+        </div>
+
+        <div class="map-panel">
+          <div class="map-panel-header">
+            <strong>실시간 지도</strong>
+            <span data-live-map-status>GPS 대기</span>
+          </div>
+          <div class="route-map" data-live-map aria-label="실시간 러닝 지도"></div>
+        </div>
+
+        <div class="media-panel">
+          <div class="media-panel-header">
+            <strong>음악/영상</strong>
+            <span data-media-status>미연결</span>
+          </div>
+          <div class="media-controls">
+            <input type="url" data-media-url placeholder="음악/영상 URL" aria-label="음악 또는 영상 URL" />
+            <input type="file" data-media-file accept="audio/*,video/*" aria-label="음악 또는 영상 파일" />
+            <button type="button" data-media-connect>연결</button>
+          </div>
+          <div class="media-actions">
+            <button type="button" data-media-play disabled>듣기</button>
+            <button type="button" data-media-stop disabled>정지</button>
+          </div>
+          <audio data-media-audio controls hidden></audio>
+          <video data-media-video controls playsinline hidden></video>
+          <div class="media-frame-wrap" data-media-frame-wrap hidden>
+            <iframe data-media-frame title="연결된 영상" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+          </div>
+        </div>
+
+        <div class="voice-panel">
+          <div>
+            <strong>음성 안내</strong>
+            <span data-voice-status>5분마다</span>
+          </div>
+          <label class="voice-toggle">
+            <input type="checkbox" data-voice-toggle checked />
+            <span data-voice-toggle-label>켜짐</span>
+          </label>
+          <button type="button" data-voice-test>테스트</button>
+        </div>
+
+        <div class="run-actions">
+          <button class="primary-action" type="button" data-action="start">시작</button>
+          <div class="secondary-actions">
+            <button type="button" data-action="pause" disabled>일시정지</button>
+            <button type="button" data-action="finish" disabled>종료</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="records-screen" aria-labelledby="records-tab">
+        <div class="section-heading">
+          <p class="eyebrow">History</p>
+          <h2>기록</h2>
+        </div>
+
+        <div class="calendar-panel" aria-label="월간 러닝 달력">
+          <div class="calendar-header">
+            <button type="button" data-calendar-prev aria-label="이전 달">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+            </button>
+            <strong data-calendar-title>이번 달</strong>
+            <button type="button" data-calendar-next aria-label="다음 달">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </div>
+          <div class="calendar-weekdays" aria-hidden="true">
+            <span>일</span>
+            <span>월</span>
+            <span>화</span>
+            <span>수</span>
+            <span>목</span>
+            <span>금</span>
+            <span>토</span>
+          </div>
+          <div class="calendar-grid" data-calendar-grid></div>
+        </div>
+
+        <div class="day-detail" data-day-detail hidden>
+          <strong data-day-detail-title>오늘</strong>
+          <p data-day-detail-summary>기록이 없습니다.</p>
+          <div class="day-record-list" data-day-record-list></div>
+          <div class="map-panel record-map-panel" data-record-map-panel hidden>
+            <div class="map-panel-header">
+              <strong>경로 지도</strong>
+              <span data-record-map-status>경로 없음</span>
+            </div>
+            <div class="route-map" data-record-map aria-label="저장된 러닝 경로 지도"></div>
+          </div>
+        </div>
+
+        <div class="empty-state" data-record-empty>
+          <strong>첫 러닝을 기다리는 중</strong>
+          <p>완료한 러닝 기록이 날짜순으로 표시됩니다.</p>
+        </div>
+
+        <div class="record-list" data-record-list aria-label="러닝 기록">
+          <article>
+            <div>
+              <strong>예시 기록</strong>
+              <span>5.00 km · 31:20 · 6'16"</span>
+            </div>
+            <button type="button">보기</button>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen" id="stats-screen" aria-labelledby="stats-tab">
+        <div class="section-heading">
+          <p class="eyebrow">Stats</p>
+          <h2>통계</h2>
+        </div>
+
+        <div class="stats-summary">
+          <article>
+            <span>이번 달 거리</span>
+            <strong data-month-distance>0.0 km</strong>
+          </article>
+          <article>
+            <span>러닝 횟수</span>
+            <strong data-month-count>0회</strong>
+          </article>
+          <article>
+            <span>평균 페이스</span>
+            <strong data-average-pace>--'--"</strong>
+          </article>
+        </div>
+
+        <div class="goal-panel">
+          <div>
+            <span>월간 목표</span>
+            <strong data-goal-text>0 / 50 km</strong>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <span data-goal-progress></span>
+          </div>
+        </div>
+      </section>
+
+      <nav class="bottom-nav" aria-label="주요 화면">
+        <button class="is-active" id="run-tab" type="button" data-target="run-screen">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z" /></svg>
+          <span>러닝</span>
+        </button>
+        <button id="records-tab" type="button" data-target="records-screen">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h12" /></svg>
+          <span>기록</span>
+        </button>
+        <button id="stats-tab" type="button" data-target="stats-screen">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7" /></svg>
+          <span>통계</span>
+        </button>
+      </nav>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

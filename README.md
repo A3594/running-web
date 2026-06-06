@@ -1,0 +1,39 @@
+# 런닝웹
+
+GPS 러닝 기록을 남기고, 달력 기록과 지도 경로를 확인할 수 있는 설치형 웹앱입니다.
+
+## 주요 기능
+
+- 러닝 시작, 일시정지, 종료
+- GPS 거리, 페이스, 칼로리 계산
+- 러닝 기록 저장
+- 월간 달력에서 달린 날과 거리 확인
+- 지도 경로 저장 및 표시
+- 음악/영상 연결
+- 5분마다 거리와 시간당 속도 음성 안내
+- PWA 홈 화면 설치 지원
+
+## GitHub Pages 배포 방법
+
+1. GitHub에서 새 저장소를 만듭니다.
+2. 이 폴더의 파일 전체를 저장소에 올립니다.
+3. GitHub 저장소에서 `Settings` > `Pages`로 이동합니다.
+4. `Build and deployment`에서 `Deploy from a branch`를 선택합니다.
+5. Branch를 `main`, folder를 `/root`로 선택하고 저장합니다.
+6. 잠시 기다리면 `https://아이디.github.io/저장소이름/` 주소가 생성됩니다.
+
+## 핸드폰 설치 방법
+
+- Android Chrome: 배포 주소 접속 후 `앱 설치` 또는 `홈 화면에 추가`
+- iPhone Safari: 공유 버튼 > `홈 화면에 추가`
+
+GPS와 PWA 설치는 HTTPS 주소에서 가장 안정적으로 작동합니다. GitHub Pages 주소는 HTTPS로 제공됩니다.
+
+## 파일 구성
+
+- `index.html`: 화면 구조
+- `styles.css`: 앱 디자인
+- `app.js`: 러닝, GPS, 기록, 지도, 음악, 음성 안내 동작
+- `manifest.webmanifest`: 설치형 앱 정보
+- `service-worker.js`: 앱 캐시와 오프라인 지원
+- `icon.svg`, `icon-192.png`, `icon-512.png`: 앱 아이콘
