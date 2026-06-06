@@ -52,6 +52,7 @@ const installAction = document.querySelector("[data-install-action]");
 const installMessage = document.querySelector("[data-install-message]");
 
 const STORAGE_KEY = "running-web-records";
+const MEDIA_STORAGE_KEY = "running-web-media";
 const MONTH_GOAL_KM = 50;
 const VOICE_INTERVAL_MS = 5 * 60 * 1000;
 let records = loadRecords();
@@ -61,6 +62,7 @@ let liveRouteMap = null;
 let recordRouteMap = null;
 let connectedMedia = null;
 let mediaObjectUrl = null;
+let shouldPlaySavedMediaOnTap = false;
 let deferredInstallPrompt = null;
 
 const runState = {
@@ -100,7 +102,8 @@ calendarPrevButton?.addEventListener("click", () => changeCalendarMonth(-1));
 calendarNextButton?.addEventListener("click", () => changeCalendarMonth(1));
 mediaConnectButton?.addEventListener("click", connectMedia);
 mediaPlayButton?.addEventListener("click", playMedia);
-mediaStopButton?.addEventListener("click", stopMedia);
+mediaStopButton?.addEventListener("click", () => stopMedia(true));
+document.addEventListener("pointerdown", playSavedMediaFromScreenTap, { passive: true });
 voiceToggle?.addEventListener("change", renderVoiceState);
 voiceTestButton?.addEventListener("click", () => announceRunProgress(true));
 installButton?.addEventListener("click", installApp);
@@ -115,6 +118,7 @@ renderStats();
 updateLiveMap();
 renderVoiceState();
 renderInstallState();
+loadSavedMedia();
 
 function startRun() {
   stopTimer();
@@ -749,7 +753,9 @@ function connectMedia() {
       source: mediaObjectUrl,
       name: selectedFile.name,
     };
-    prepareConnectedMedia();
+    clearSavedMedia();
+    shouldPlaySavedMediaOnTap = false;
+    prepareConnectedMedia({ statusMessage: "파일 연결됨" });
     return;
   }
 
@@ -759,11 +765,14 @@ function connectMedia() {
   }
 
   connectedMedia = getMediaFromUrl(url);
-  prepareConnectedMedia();
+  saveConnectedMedia(connectedMedia);
+  shouldPlaySavedMediaOnTap = true;
+  prepareConnectedMedia({ statusMessage: connectedMedia.kind === "youtube" ? "영상 저장됨" : "저장됨" });
 }
 
-function prepareConnectedMedia() {
+function prepareConnectedMedia(options = {}) {
   if (!connectedMedia) return;
+  const { statusMessage } = options;
 
   if (connectedMedia.kind === "audio" && mediaAudio) {
     mediaAudio.src = connectedMedia.source;
@@ -779,6 +788,10 @@ function prepareConnectedMedia() {
 
   if (mediaPlayButton) mediaPlayButton.disabled = false;
   if (mediaStopButton) mediaStopButton.disabled = false;
+  if (statusMessage) {
+    setMediaStatus(statusMessage);
+    return;
+  }
   setMediaStatus(connectedMedia.kind === "youtube" ? "영상 연결됨" : "연결됨");
 }
 
@@ -793,6 +806,7 @@ function playMedia() {
     if (mediaFrame && mediaFrameWrap) {
       mediaFrame.src = connectedMedia.source;
       mediaFrameWrap.hidden = false;
+      shouldPlaySavedMediaOnTap = false;
       setMediaStatus("영상 재생");
     }
     return;
@@ -803,12 +817,13 @@ function playMedia() {
 
   hideMediaPlayers();
   player.hidden = false;
+  shouldPlaySavedMediaOnTap = false;
   player.play()
     .then(() => setMediaStatus("재생 중"))
     .catch(() => setMediaStatus("재생 실패"));
 }
 
-function stopMedia() {
+function stopMedia(disableTapToPlay = false) {
   [mediaAudio, mediaVideo].forEach((player) => {
     if (!player) return;
     player.pause();
@@ -822,9 +837,26 @@ function stopMedia() {
     mediaFrameWrap.hidden = true;
   }
 
+  if (disableTapToPlay) {
+    shouldPlaySavedMediaOnTap = false;
+  }
+
   if (connectedMedia) {
     setMediaStatus("연결됨");
   }
+}
+
+function playSavedMediaFromScreenTap(event) {
+  if (!shouldPlaySavedMediaOnTap || !connectedMedia) return;
+
+  const target = event.target;
+  if (target?.closest?.("button, input, audio, video, iframe, a")) return;
+
+  const runScreen = document.getElementById("run-screen");
+  if (!runScreen?.classList.contains("is-active")) return;
+  if (!target?.closest?.("#run-screen")) return;
+
+  playMedia();
 }
 
 function hideMediaPlayers() {
@@ -852,6 +884,7 @@ function getMediaFromUrl(url) {
       kind: "youtube",
       source: youtubeSource,
       name: "YouTube",
+      originalUrl: url,
     };
   }
 
@@ -868,6 +901,7 @@ function getMediaFromUrl(url) {
     kind,
     source: url,
     name: url,
+    originalUrl: url,
   };
 }
 
@@ -990,6 +1024,72 @@ function selectRecordDate(record) {
   selectedDateKey = getDateKey(record.finishedAt);
   renderCalendar();
   renderDayDetail();
+}
+
+function loadSavedMedia() {
+  try {
+    const saved = localStorage.getItem(MEDIA_STORAGE_KEY);
+    if (!saved) return;
+
+    const media = normalizeSavedMedia(JSON.parse(saved));
+    if (!media) {
+      clearSavedMedia();
+      return;
+    }
+
+    connectedMedia = media;
+    shouldPlaySavedMediaOnTap = true;
+
+    if (mediaUrlInput) {
+      mediaUrlInput.value = media.originalUrl || media.source;
+    }
+
+    prepareConnectedMedia({ statusMessage: "저장됨" });
+  } catch {
+    clearSavedMedia();
+  }
+}
+
+function saveConnectedMedia(media) {
+  try {
+    if (!media || media.source.startsWith("blob:")) {
+      clearSavedMedia();
+      return;
+    }
+
+    const savedMedia = {
+      kind: media.kind,
+      source: media.source,
+      name: media.name,
+      originalUrl: media.originalUrl || media.source,
+    };
+
+    localStorage.setItem(MEDIA_STORAGE_KEY, JSON.stringify(savedMedia));
+  } catch {
+    // Storage can fail in private or restricted browser modes.
+  }
+}
+
+function clearSavedMedia() {
+  try {
+    localStorage.removeItem(MEDIA_STORAGE_KEY);
+  } catch {
+    // Storage can fail in private or restricted browser modes.
+  }
+}
+
+function normalizeSavedMedia(media) {
+  if (!media || typeof media.source !== "string") return null;
+  if (media.source.startsWith("blob:")) return null;
+
+  const kind = ["audio", "video", "youtube"].includes(media.kind) ? media.kind : "audio";
+
+  return {
+    kind,
+    source: media.source,
+    name: typeof media.name === "string" ? media.name : "저장된 미디어",
+    originalUrl: typeof media.originalUrl === "string" ? media.originalUrl : media.source,
+  };
 }
 
 function loadRecords() {
