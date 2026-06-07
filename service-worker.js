@@ -1,4 +1,4 @@
-const CACHE_NAME = "running-web-v4";
+const CACHE_NAME = "running-web-v5";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -14,7 +14,6 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
   );
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -30,20 +29,35 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) return cachedResponse;
-
-      return fetch(event.request)
-        .then((networkResponse) => {
+    fetch(event.request)
+      .then((networkResponse) => {
+        const requestUrl = new URL(event.request.url);
+        if (requestUrl.origin === self.location.origin && networkResponse.ok) {
           const responseCopy = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseCopy));
-          return networkResponse;
-        })
-        .catch(() => caches.match("./index.html"));
-    })
+        }
+        return networkResponse;
+      })
+      .catch(async () => {
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) return cachedResponse;
+
+        if (event.request.mode === "navigate") {
+          const cachedIndex = await caches.match("./index.html");
+          if (cachedIndex) return cachedIndex;
+        }
+
+        return new Response("Offline", { status: 503, statusText: "Offline" });
+      })
   );
 });

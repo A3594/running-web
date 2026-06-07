@@ -50,11 +50,15 @@ const installButton = document.querySelector("[data-install-button]");
 const installPanel = document.querySelector("[data-install-panel]");
 const installAction = document.querySelector("[data-install-action]");
 const installMessage = document.querySelector("[data-install-message]");
+const updatePanel = document.querySelector("[data-update-panel]");
+const updateAction = document.querySelector("[data-update-action]");
+const updateMessage = document.querySelector("[data-update-message]");
 
 const STORAGE_KEY = "running-web-records";
 const MEDIA_STORAGE_KEY = "running-web-media";
 const MONTH_GOAL_KM = 50;
 const VOICE_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_CHECK_MS = 30 * 60 * 1000;
 const GPS_OPTIONS = {
   enableHighAccuracy: true,
   maximumAge: 0,
@@ -72,6 +76,8 @@ let connectedMedia = null;
 let mediaObjectUrl = null;
 let shouldPlaySavedMediaOnTap = false;
 let deferredInstallPrompt = null;
+let waitingServiceWorker = null;
+let isRefreshingForUpdate = false;
 
 const runState = {
   status: "idle",
@@ -119,6 +125,7 @@ voiceToggle?.addEventListener("change", renderVoiceState);
 voiceTestButton?.addEventListener("click", () => announceRunProgress(true));
 installButton?.addEventListener("click", installApp);
 installAction?.addEventListener("click", installApp);
+updateAction?.addEventListener("click", applyAppUpdate);
 window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
 window.addEventListener("appinstalled", handleAppInstalled);
 document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -157,13 +164,70 @@ function startRun() {
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
 
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (isRefreshingForUpdate) return;
+    isRefreshingForUpdate = true;
+    window.location.reload();
+  });
+
+  window.addEventListener("load", async () => {
+    try {
+      const registration = await navigator.serviceWorker.register("./service-worker.js");
+      watchForAppUpdate(registration);
+      checkForAppUpdate(registration);
+      window.setInterval(() => checkForAppUpdate(registration), UPDATE_CHECK_MS);
+    } catch {
       if (installMessage) {
         installMessage.textContent = "설치 준비 중 오류가 있어 다시 새로고침해보세요.";
       }
+    }
+  });
+}
+
+function watchForAppUpdate(registration) {
+  if (registration.waiting && navigator.serviceWorker.controller) {
+    showAppUpdate(registration.waiting);
+  }
+
+  registration.addEventListener("updatefound", () => {
+    const newWorker = registration.installing;
+    if (!newWorker) return;
+
+    newWorker.addEventListener("statechange", () => {
+      if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+        showAppUpdate(newWorker);
+      }
     });
   });
+}
+
+function checkForAppUpdate(registration) {
+  if (typeof registration.update !== "function") return;
+  registration.update().catch(() => {});
+}
+
+function showAppUpdate(worker) {
+  waitingServiceWorker = worker;
+  if (updateAction) updateAction.disabled = false;
+  if (updateMessage) {
+    updateMessage.textContent = "버튼을 누르면 최신 파일을 적용하고 다시 열립니다.";
+  }
+  if (updatePanel) updatePanel.hidden = false;
+}
+
+function applyAppUpdate() {
+  if (updateAction) updateAction.disabled = true;
+  if (updateMessage) {
+    updateMessage.textContent = "최신 버전으로 바꾸는 중입니다.";
+  }
+
+  if (waitingServiceWorker) {
+    waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+    window.setTimeout(() => window.location.reload(), 3000);
+    return;
+  }
+
+  window.location.reload();
 }
 
 function handleBeforeInstallPrompt(event) {
