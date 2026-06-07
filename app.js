@@ -58,7 +58,7 @@ const updateAction = document.querySelector("[data-update-action]");
 const updateMessage = document.querySelector("[data-update-message]");
 const appVersionMeta = document.querySelector("[data-app-version]");
 
-const APP_VERSION = "v1.1.2";
+const APP_VERSION = "v1.1.3";
 const APP_UPDATED_AT = "2026.06.07";
 const STORAGE_KEY = "running-web-records";
 const MEDIA_STORAGE_KEY = "running-web-media";
