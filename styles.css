@@ -171,6 +171,7 @@ h2 {
 .run-status,
 .metric-hero,
 .metrics-grid article,
+.gps-panel,
 .empty-state,
 .record-list article,
 .stats-summary article,
@@ -284,6 +285,38 @@ h2 {
   margin-top: 18px;
 }
 
+.gps-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 14px;
+}
+
+.gps-panel strong,
+.gps-panel span {
+  display: block;
+}
+
+.gps-panel span {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.gps-panel button {
+  min-width: 104px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #075985;
+  cursor: pointer;
+  font-weight: 800;
+}
+
 .map-panel {
   margin-top: 14px;
   overflow: hidden;
@@ -308,10 +341,28 @@ h2 {
   font-weight: 800;
 }
 
+.map-frame {
+  position: relative;
+}
+
 .route-map {
   width: 100%;
   height: 220px;
   background: #e5e7eb;
+}
+
+.map-placeholder {
+  position: absolute;
+  inset: auto 12px 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.4;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.12);
 }
 
 .record-map-panel {

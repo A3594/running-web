@@ -9,6 +9,8 @@ const distanceValue = document.querySelector("[data-distance]");
 const paceValue = document.querySelector("[data-pace]");
 const caloriesValue = document.querySelector("[data-calories]");
 const gpsValue = document.querySelector("[data-gps]");
+const gpsDetail = document.querySelector("[data-gps-detail]");
+const gpsTestButton = document.querySelector("[data-gps-test]");
 const startButton = document.querySelector("[data-action='start']");
 const pauseButton = document.querySelector("[data-action='pause']");
 const finishButton = document.querySelector("[data-action='finish']");
@@ -28,6 +30,7 @@ const dayDetailTitle = document.querySelector("[data-day-detail-title]");
 const dayDetailSummary = document.querySelector("[data-day-detail-summary]");
 const dayRecordList = document.querySelector("[data-day-record-list]");
 const liveMapElement = document.querySelector("[data-live-map]");
+const liveMapPlaceholder = document.querySelector("[data-live-map-placeholder]");
 const liveMapStatus = document.querySelector("[data-live-map-status]");
 const recordMapPanel = document.querySelector("[data-record-map-panel]");
 const recordMapElement = document.querySelector("[data-record-map]");
@@ -55,7 +58,7 @@ const updateAction = document.querySelector("[data-update-action]");
 const updateMessage = document.querySelector("[data-update-message]");
 const appVersionMeta = document.querySelector("[data-app-version]");
 
-const APP_VERSION = "v1.1.0";
+const APP_VERSION = "v1.1.1";
 const APP_UPDATED_AT = "2026.06.07";
 const STORAGE_KEY = "running-web-records";
 const MEDIA_STORAGE_KEY = "running-web-media";
@@ -68,6 +71,7 @@ const GPS_OPTIONS = {
   timeout: 30000,
 };
 const GPS_RETRY_MS = 2500;
+const STALE_POSITION_MS = 2 * 60 * 1000;
 const MAX_DISTANCE_ACCURACY_METERS = 100;
 const MAX_RUNNING_SPEED_MPS = 8;
 let records = loadRecords();
@@ -91,6 +95,10 @@ const runState = {
   gpsWatchId: null,
   gpsRetryId: null,
   gpsStatus: "idle",
+  gpsPermission: "unknown",
+  gpsMessage: "",
+  lastGpsError: "",
+  lastGpsAt: null,
   lastPosition: null,
   livePosition: null,
   distanceMeters: 0,
@@ -126,6 +134,7 @@ mediaStopButton?.addEventListener("click", () => stopMedia(true));
 document.addEventListener("pointerdown", playSavedMediaFromScreenTap, { passive: true });
 voiceToggle?.addEventListener("change", renderVoiceState);
 voiceTestButton?.addEventListener("click", () => announceRunProgress(true));
+gpsTestButton?.addEventListener("click", handleGpsButton);
 installButton?.addEventListener("click", installApp);
 installAction?.addEventListener("click", installApp);
 updateAction?.addEventListener("click", applyAppUpdate);
@@ -134,6 +143,7 @@ window.addEventListener("appinstalled", handleAppInstalled);
 document.addEventListener("visibilitychange", handleVisibilityChange);
 
 registerServiceWorker();
+watchGpsPermission();
 renderRun();
 renderRecords();
 renderStats();
@@ -156,6 +166,9 @@ function startRun() {
   runState.lastPosition = null;
   runState.livePosition = null;
   runState.gpsStatus = "requesting";
+  runState.gpsMessage = "현재 위치를 찾는 중입니다.";
+  runState.lastGpsError = "";
+  runState.lastGpsAt = null;
   runState.lastVoiceAnnouncementMs = 0;
 
   startTimer();
@@ -342,6 +355,8 @@ function togglePause() {
     runState.lastPosition = null;
     runState.livePosition = null;
     runState.gpsStatus = "requesting";
+    runState.gpsMessage = "현재 위치를 다시 찾는 중입니다.";
+    runState.lastGpsError = "";
     startTimer();
     startGps();
     requestRunWakeLock();
@@ -383,6 +398,7 @@ function stopTimer() {
 function startGps() {
   if (!("geolocation" in navigator)) {
     runState.gpsStatus = "unsupported";
+    runState.gpsMessage = "이 브라우저에서는 GPS를 사용할 수 없습니다.";
     renderRun();
     return;
   }
@@ -390,8 +406,17 @@ function startGps() {
   clearGpsRetry();
   clearGpsWatch();
   runState.gpsStatus = "requesting";
+  runState.gpsMessage = "현재 위치를 찾는 중입니다.";
   renderRun();
   updateLiveMap();
+
+  const requestStartedAt = Date.now();
+  navigator.geolocation.getCurrentPosition(
+    (position) => handlePosition(position, { trackDistance: true }),
+    (error) => handleGpsError(error, { canRetry: false, requestStartedAt }),
+    GPS_OPTIONS
+  );
+
   runState.gpsWatchId = navigator.geolocation.watchPosition(
     handlePosition,
     handleGpsError,
@@ -427,9 +452,7 @@ function scheduleGpsRetry() {
   }, GPS_RETRY_MS);
 }
 
-function handlePosition(position) {
-  if (runState.status !== "running") return;
-
+function handlePosition(position, options = {}) {
   const currentPosition = {
     latitude: position.coords.latitude,
     longitude: position.coords.longitude,
@@ -437,9 +460,36 @@ function handlePosition(position) {
     timestamp: position.timestamp,
   };
 
+  if (!isValidPosition(currentPosition)) {
+    runState.gpsStatus = "error";
+    runState.gpsMessage = "폰에서 받은 위치값이 올바르지 않습니다.";
+    renderRun();
+    updateLiveMap();
+    return;
+  }
+
+  if (isStalePosition(currentPosition)) {
+    runState.gpsStatus = "stale";
+    runState.gpsMessage = "폰이 오래된 위치를 보내서 무시했습니다. GPS를 다시 연결해보세요.";
+    renderRun();
+    updateLiveMap();
+    return;
+  }
+
   clearGpsRetry();
   runState.livePosition = currentPosition;
+  runState.lastGpsAt = Date.now();
+  runState.lastGpsError = "";
   runState.gpsStatus = currentPosition.accuracy <= 35 ? "ready" : "weak";
+  runState.gpsMessage = getGpsFixMessage(currentPosition);
+
+  const shouldTrackDistance = options.trackDistance !== false && runState.status === "running";
+
+  if (!shouldTrackDistance) {
+    renderRun();
+    updateLiveMap();
+    return;
+  }
 
   if (!isAccurateEnoughForDistance(currentPosition)) {
     renderRun();
@@ -464,11 +514,19 @@ function handlePosition(position) {
   updateLiveMap();
 }
 
-function handleGpsError(error) {
+function handleGpsError(error, options = {}) {
+  const canRetry = options.canRetry !== false;
+
+  if (!canRetry && options.requestStartedAt && runState.lastGpsAt >= options.requestStartedAt) {
+    return;
+  }
+
   runState.lastPosition = null;
+  runState.lastGpsError = getGpsErrorMessage(error);
 
   if (error.code === error.PERMISSION_DENIED || error.code === 1) {
     runState.gpsStatus = "denied";
+    runState.gpsPermission = "denied";
   } else if (error.code === error.POSITION_UNAVAILABLE || error.code === 2) {
     runState.gpsStatus = "unavailable";
   } else if (error.code === error.TIMEOUT || error.code === 3) {
@@ -477,7 +535,9 @@ function handleGpsError(error) {
     runState.gpsStatus = "error";
   }
 
-  if (runState.gpsStatus === "timeout" || runState.gpsStatus === "unavailable") {
+  runState.gpsMessage = getGpsErrorHint(runState.gpsStatus);
+
+  if (canRetry && (runState.gpsStatus === "timeout" || runState.gpsStatus === "unavailable")) {
     clearGpsWatch();
     scheduleGpsRetry();
   }
@@ -524,6 +584,8 @@ function renderRun() {
     gpsValue.textContent = getGpsLabel();
   }
 
+  renderGpsDetail();
+  renderLiveMapPlaceholder();
   checkVoiceAnnouncement(elapsedMs);
 
   if (startButton) {
@@ -547,6 +609,80 @@ function renderRun() {
     "aria-label",
     isRunning ? "기록 중" : isPaused ? "일시정지" : isFinished ? "완료" : "준비"
   );
+}
+
+function renderGpsDetail() {
+  if (gpsDetail) {
+    gpsDetail.textContent = getGpsDetail();
+  }
+
+  if (gpsTestButton) {
+    gpsTestButton.textContent = runState.status === "running" ? "GPS 다시 연결" : "현재 위치 확인";
+  }
+}
+
+function renderLiveMapPlaceholder() {
+  if (!liveMapPlaceholder) return;
+
+  const message = getLiveMapPlaceholderMessage();
+  liveMapPlaceholder.hidden = message === "";
+  liveMapPlaceholder.textContent = message;
+}
+
+function handleGpsButton() {
+  if (runState.status === "running") {
+    runState.lastPosition = null;
+    startGps();
+    return;
+  }
+
+  requestSingleGpsFix();
+}
+
+function requestSingleGpsFix() {
+  if (!("geolocation" in navigator)) {
+    runState.gpsStatus = "unsupported";
+    runState.gpsMessage = "이 브라우저에서는 GPS를 사용할 수 없습니다.";
+    renderRun();
+    updateLiveMap();
+    return;
+  }
+
+  runState.gpsStatus = "requesting";
+  runState.gpsMessage = "현재 위치 권한과 좌표를 확인하는 중입니다.";
+  runState.lastGpsError = "";
+  renderRun();
+  updateLiveMap();
+
+  const requestStartedAt = Date.now();
+  navigator.geolocation.getCurrentPosition(
+    (position) => handlePosition(position, { trackDistance: false }),
+    (error) => handleGpsError(error, { canRetry: false, requestStartedAt }),
+    GPS_OPTIONS
+  );
+}
+
+async function watchGpsPermission() {
+  if (!navigator.permissions?.query) return;
+
+  try {
+    const permission = await navigator.permissions.query({ name: "geolocation" });
+    runState.gpsPermission = permission.state;
+    renderRun();
+
+    const handlePermissionChange = () => {
+      runState.gpsPermission = permission.state;
+      renderRun();
+    };
+
+    if (typeof permission.addEventListener === "function") {
+      permission.addEventListener("change", handlePermissionChange);
+    } else {
+      permission.onchange = handlePermissionChange;
+    }
+  } catch {
+    runState.gpsPermission = "unknown";
+  }
 }
 
 function saveCurrentRun() {
@@ -716,6 +852,8 @@ function updateLiveMap() {
   if (liveMapStatus) {
     liveMapStatus.textContent = getLiveMapLabel();
   }
+
+  renderLiveMapPlaceholder();
 
   if (!liveMapElement) return;
 
@@ -888,13 +1026,17 @@ function getRouteDistanceMeters(routePoints) {
 function getLiveMapLabel() {
   if (!canUseMap()) return "지도 로드 실패";
   if (runState.routePoints.length > 1) return "자세한 경로";
-  if (runState.routePoints.length === 1 || runState.livePosition) return "현재 위치 확대";
+  if (runState.routePoints.length === 1 || runState.livePosition) {
+    const latestPoint = runState.livePosition || runState.routePoints[runState.routePoints.length - 1];
+    return isAccurateEnoughForDistance(latestPoint) ? "현재 위치 확대" : "정확도 낮음";
+  }
   if (runState.gpsStatus === "requesting") return "위치 찾는 중";
   if (runState.gpsStatus === "ready") return "GPS 연결됨";
   if (runState.gpsStatus === "weak") return "GPS 약함";
   if (runState.gpsStatus === "denied") return "권한 거부";
   if (runState.gpsStatus === "timeout") return "GPS 재시도";
   if (runState.gpsStatus === "unavailable") return "위치 불가";
+  if (runState.gpsStatus === "stale") return "오래된 위치";
 
   return "GPS 대기";
 }
@@ -1333,6 +1475,10 @@ function formatRecordTime(value) {
 }
 
 function getRunHint() {
+  if (runState.gpsMessage) {
+    return runState.gpsMessage;
+  }
+
   if (runState.gpsStatus === "denied") {
     return "위치 권한을 허용해야 거리를 기록할 수 있습니다";
   }
@@ -1351,6 +1497,10 @@ function getRunHint() {
 
   if (runState.gpsStatus === "weak") {
     return "GPS가 약하지만 위치를 계속 확인하고 있습니다";
+  }
+
+  if (runState.gpsStatus === "stale") {
+    return "오래된 위치를 무시했습니다. GPS를 다시 연결해보세요";
   }
 
   if (runState.status === "idle") {
@@ -1381,6 +1531,7 @@ function getGpsLabel() {
     timeout: "시간 초과",
     error: "오류",
     unsupported: "미지원",
+    stale: "오래됨",
   }[runState.gpsStatus];
 }
 
@@ -1422,7 +1573,95 @@ function getDistanceMeters(from, to) {
 }
 
 function isAccurateEnoughForDistance(position) {
+  if (!position) return false;
   return !position.accuracy || position.accuracy <= MAX_DISTANCE_ACCURACY_METERS;
+}
+
+function isValidPosition(position) {
+  return Number.isFinite(position.latitude) && Number.isFinite(position.longitude);
+}
+
+function isStalePosition(position) {
+  return position.timestamp && Date.now() - position.timestamp > STALE_POSITION_MS;
+}
+
+function getGpsFixMessage(position) {
+  const accuracyText = Number.isFinite(position.accuracy)
+    ? `정확도 약 ${Math.round(position.accuracy)}m`
+    : "정확도 확인 중";
+
+  return `현재 위치 수신 · ${accuracyText}`;
+}
+
+function getGpsDetail() {
+  const permissionText = {
+    granted: "권한 허용됨",
+    prompt: "권한 확인 필요",
+    denied: "권한 차단됨",
+    unknown: "권한 상태 확인 중",
+  }[runState.gpsPermission] || "권한 상태 확인 중";
+
+  if (runState.lastGpsError) {
+    return `${permissionText} · ${runState.lastGpsError}`;
+  }
+
+  if (!runState.livePosition) {
+    return `${permissionText} · 실제 좌표를 아직 받지 못했습니다`;
+  }
+
+  const accuracyText = Number.isFinite(runState.livePosition.accuracy)
+    ? `정확도 ${Math.round(runState.livePosition.accuracy)}m`
+    : "정확도 확인 중";
+  const receivedText = runState.lastGpsAt
+    ? `${new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(runState.lastGpsAt)} 수신`
+    : "방금 수신";
+
+  return `${permissionText} · ${accuracyText} · ${receivedText}`;
+}
+
+function getGpsErrorMessage(error) {
+  if (error.code === error.PERMISSION_DENIED || error.code === 1) {
+    return "위치 권한이 차단되어 있습니다";
+  }
+
+  if (error.code === error.POSITION_UNAVAILABLE || error.code === 2) {
+    return "폰에서 현재 위치를 찾지 못했습니다";
+  }
+
+  if (error.code === error.TIMEOUT || error.code === 3) {
+    return "GPS 응답 시간이 초과되었습니다";
+  }
+
+  return "GPS 오류가 발생했습니다";
+}
+
+function getGpsErrorHint(status) {
+  return {
+    denied: "위치 권한을 허용해야 현재 위치를 받을 수 있습니다.",
+    unavailable: "폰이 현재 위치를 찾지 못했습니다. 실외에서 다시 시도해보세요.",
+    timeout: "GPS 응답이 늦습니다. 자동 재시도 중입니다.",
+    error: "GPS 오류가 발생했습니다. 앱을 다시 열어보세요.",
+  }[status] || "";
+}
+
+function getLiveMapPlaceholderMessage() {
+  if (!runState.livePosition && runState.routePoints.length === 0) {
+    if (runState.gpsStatus === "requesting") {
+      return "현재 위치를 찾는 중입니다. 표시된 지도는 기본 위치입니다.";
+    }
+
+    if (runState.gpsStatus === "denied") {
+      return "위치 권한이 차단되어 현재 위치를 표시할 수 없습니다.";
+    }
+
+    return "현재 위치를 아직 받지 못했습니다. 표시된 지도는 기본 위치입니다.";
+  }
+
+  if (runState.livePosition && !isAccurateEnoughForDistance(runState.livePosition)) {
+    return `GPS 정확도가 약 ${Math.round(runState.livePosition.accuracy)}m라 실제 위치와 다를 수 있습니다.`;
+  }
+
+  return "";
 }
 
 function isUsefulMovement(movedMeters, currentPosition, previousPosition) {
