@@ -55,6 +55,14 @@ const STORAGE_KEY = "running-web-records";
 const MEDIA_STORAGE_KEY = "running-web-media";
 const MONTH_GOAL_KM = 50;
 const VOICE_INTERVAL_MS = 5 * 60 * 1000;
+const GPS_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 30000,
+};
+const GPS_RETRY_MS = 2500;
+const MAX_DISTANCE_ACCURACY_METERS = 100;
+const MAX_RUNNING_SPEED_MPS = 8;
 let records = loadRecords();
 let calendarDate = new Date();
 let selectedDateKey = getDateKey(new Date());
@@ -72,11 +80,14 @@ const runState = {
   elapsedBeforePause: 0,
   timerId: null,
   gpsWatchId: null,
+  gpsRetryId: null,
   gpsStatus: "idle",
   lastPosition: null,
+  livePosition: null,
   distanceMeters: 0,
   routePoints: [],
   lastVoiceAnnouncementMs: 0,
+  wakeLock: null,
 };
 
 tabs.forEach((tab) => {
@@ -110,6 +121,7 @@ installButton?.addEventListener("click", installApp);
 installAction?.addEventListener("click", installApp);
 window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
 window.addEventListener("appinstalled", handleAppInstalled);
+document.addEventListener("visibilitychange", handleVisibilityChange);
 
 registerServiceWorker();
 renderRun();
@@ -131,11 +143,13 @@ function startRun() {
   runState.distanceMeters = 0;
   runState.routePoints = [];
   runState.lastPosition = null;
+  runState.livePosition = null;
   runState.gpsStatus = "requesting";
   runState.lastVoiceAnnouncementMs = 0;
 
   startTimer();
   startGps();
+  requestRunWakeLock();
   renderRun();
   updateLiveMap();
 }
@@ -208,14 +222,41 @@ async function installApp() {
   renderInstallState();
 }
 
+function handleVisibilityChange() {
+  if (document.visibilityState === "visible" && runState.status === "running") {
+    requestRunWakeLock();
+  }
+}
+
+async function requestRunWakeLock() {
+  if (runState.status !== "running" || runState.wakeLock || !navigator.wakeLock) return;
+
+  try {
+    runState.wakeLock = await navigator.wakeLock.request("screen");
+    runState.wakeLock.addEventListener("release", () => {
+      runState.wakeLock = null;
+    });
+  } catch {
+    runState.wakeLock = null;
+  }
+}
+
+function releaseRunWakeLock() {
+  const wakeLock = runState.wakeLock;
+  runState.wakeLock = null;
+  wakeLock?.release?.().catch(() => {});
+}
+
 function togglePause() {
   if (runState.status === "running") {
     runState.elapsedBeforePause = getElapsedMs();
     runState.status = "paused";
     runState.lastPosition = null;
+    runState.livePosition = null;
     stopTimer();
     stopGps();
     stopVoice();
+    releaseRunWakeLock();
     renderRun();
     updateLiveMap();
     return;
@@ -225,9 +266,11 @@ function togglePause() {
     runState.startedAt = Date.now();
     runState.status = "running";
     runState.lastPosition = null;
+    runState.livePosition = null;
     runState.gpsStatus = "requesting";
     startTimer();
     startGps();
+    requestRunWakeLock();
     renderRun();
     updateLiveMap();
   }
@@ -241,9 +284,11 @@ function finishRun() {
   saveCurrentRun();
   runState.status = "finished";
   runState.lastPosition = null;
+  runState.livePosition = null;
   stopTimer();
   stopGps();
   stopVoice();
+  releaseRunWakeLock();
   renderRun();
   renderRecords();
   renderStats();
@@ -268,22 +313,44 @@ function startGps() {
     return;
   }
 
-  stopGps();
+  clearGpsRetry();
+  clearGpsWatch();
+  runState.gpsStatus = "requesting";
+  renderRun();
+  updateLiveMap();
   runState.gpsWatchId = navigator.geolocation.watchPosition(
     handlePosition,
     handleGpsError,
-    {
-      enableHighAccuracy: true,
-      maximumAge: 1000,
-      timeout: 10000,
-    }
+    GPS_OPTIONS
   );
 }
 
 function stopGps() {
+  clearGpsRetry();
+  clearGpsWatch();
+}
+
+function clearGpsWatch() {
   if (runState.gpsWatchId === null) return;
   navigator.geolocation.clearWatch(runState.gpsWatchId);
   runState.gpsWatchId = null;
+}
+
+function clearGpsRetry() {
+  if (runState.gpsRetryId === null) return;
+  window.clearTimeout(runState.gpsRetryId);
+  runState.gpsRetryId = null;
+}
+
+function scheduleGpsRetry() {
+  if (runState.status !== "running" || runState.gpsRetryId !== null) return;
+
+  runState.gpsRetryId = window.setTimeout(() => {
+    runState.gpsRetryId = null;
+    if (runState.status === "running") {
+      startGps();
+    }
+  }, GPS_RETRY_MS);
 }
 
 function handlePosition(position) {
@@ -296,20 +363,29 @@ function handlePosition(position) {
     timestamp: position.timestamp,
   };
 
+  clearGpsRetry();
+  runState.livePosition = currentPosition;
   runState.gpsStatus = currentPosition.accuracy <= 35 ? "ready" : "weak";
+
+  if (!isAccurateEnoughForDistance(currentPosition)) {
+    renderRun();
+    updateLiveMap();
+    return;
+  }
 
   if (!runState.lastPosition) {
     runState.routePoints.push(createRoutePoint(currentPosition));
+    runState.lastPosition = currentPosition;
   } else {
     const movedMeters = getDistanceMeters(runState.lastPosition, currentPosition);
 
-    if (isUsefulMovement(movedMeters, currentPosition)) {
+    if (isUsefulMovement(movedMeters, currentPosition, runState.lastPosition)) {
       runState.distanceMeters += movedMeters;
       runState.routePoints.push(createRoutePoint(currentPosition));
+      runState.lastPosition = currentPosition;
     }
   }
 
-  runState.lastPosition = currentPosition;
   renderRun();
   updateLiveMap();
 }
@@ -325,6 +401,11 @@ function handleGpsError(error) {
     runState.gpsStatus = "timeout";
   } else {
     runState.gpsStatus = "error";
+  }
+
+  if (runState.gpsStatus === "timeout" || runState.gpsStatus === "unavailable") {
+    clearGpsWatch();
+    scheduleGpsRetry();
   }
 
   renderRun();
@@ -573,7 +654,7 @@ function updateLiveMap() {
     liveRouteMap = createRouteMap(liveMapElement);
   }
 
-  drawRoute(liveRouteMap, runState.routePoints);
+  drawRoute(liveRouteMap, runState.routePoints.length > 0 ? runState.routePoints : getLiveRouteFallback());
 }
 
 function renderRecordMap(dayRecords) {
@@ -608,6 +689,10 @@ function renderRecordMap(dayRecords) {
   }
 
   drawRoute(recordRouteMap, recordWithRoute.route);
+}
+
+function getLiveRouteFallback() {
+  return runState.livePosition ? [createRoutePoint(runState.livePosition)] : [];
 }
 
 function createRouteMap(element) {
@@ -729,10 +814,13 @@ function getRouteDistanceMeters(routePoints) {
 function getLiveMapLabel() {
   if (!canUseMap()) return "지도 로드 실패";
   if (runState.routePoints.length > 1) return "자세한 경로";
-  if (runState.routePoints.length === 1) return "현재 위치 확대";
+  if (runState.routePoints.length === 1 || runState.livePosition) return "현재 위치 확대";
   if (runState.gpsStatus === "requesting") return "위치 찾는 중";
   if (runState.gpsStatus === "ready") return "GPS 연결됨";
+  if (runState.gpsStatus === "weak") return "GPS 약함";
   if (runState.gpsStatus === "denied") return "권한 거부";
+  if (runState.gpsStatus === "timeout") return "GPS 재시도";
+  if (runState.gpsStatus === "unavailable") return "위치 불가";
 
   return "GPS 대기";
 }
@@ -1179,8 +1267,16 @@ function getRunHint() {
     return "이 브라우저에서는 GPS를 사용할 수 없습니다";
   }
 
-  if (runState.gpsStatus === "unavailable" || runState.gpsStatus === "timeout") {
-    return "GPS가 잘 잡히는 실외에서 다시 시도해보세요";
+  if (runState.gpsStatus === "timeout") {
+    return "GPS 응답이 늦어 자동으로 다시 연결하고 있습니다";
+  }
+
+  if (runState.gpsStatus === "unavailable") {
+    return "위치 신호가 약합니다. 실외에서 하늘이 보이게 해보세요";
+  }
+
+  if (runState.gpsStatus === "weak") {
+    return "GPS가 약하지만 위치를 계속 확인하고 있습니다";
   }
 
   if (runState.status === "idle") {
@@ -1251,10 +1347,17 @@ function getDistanceMeters(from, to) {
   return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-function isUsefulMovement(movedMeters, currentPosition) {
+function isAccurateEnoughForDistance(position) {
+  return !position.accuracy || position.accuracy <= MAX_DISTANCE_ACCURACY_METERS;
+}
+
+function isUsefulMovement(movedMeters, currentPosition, previousPosition) {
   if (movedMeters < 1) return false;
-  if (movedMeters > 120) return false;
-  if (currentPosition.accuracy > 80) return false;
+  if (!isAccurateEnoughForDistance(currentPosition)) return false;
+
+  const elapsedSeconds = Math.max((currentPosition.timestamp - previousPosition.timestamp) / 1000, 1);
+  const speedMetersPerSecond = movedMeters / elapsedSeconds;
+  if (speedMetersPerSecond > MAX_RUNNING_SPEED_MPS && movedMeters > 30) return false;
 
   return true;
 }
