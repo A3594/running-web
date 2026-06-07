@@ -58,7 +58,7 @@ const updateAction = document.querySelector("[data-update-action]");
 const updateMessage = document.querySelector("[data-update-message]");
 const appVersionMeta = document.querySelector("[data-app-version]");
 
-const APP_VERSION = "v1.1.1";
+const APP_VERSION = "v1.1.2";
 const APP_UPDATED_AT = "2026.06.07";
 const STORAGE_KEY = "running-web-records";
 const MEDIA_STORAGE_KEY = "running-web-media";
@@ -72,7 +72,7 @@ const GPS_OPTIONS = {
 };
 const GPS_RETRY_MS = 2500;
 const STALE_POSITION_MS = 2 * 60 * 1000;
-const MAX_DISTANCE_ACCURACY_METERS = 100;
+const MAX_DISTANCE_ACCURACY_METERS = 35;
 const MAX_RUNNING_SPEED_MPS = 8;
 let records = loadRecords();
 let calendarDate = new Date();
@@ -99,6 +99,7 @@ const runState = {
   gpsMessage: "",
   lastGpsError: "",
   lastGpsAt: null,
+  rawPosition: null,
   lastPosition: null,
   livePosition: null,
   distanceMeters: 0,
@@ -165,6 +166,7 @@ function startRun() {
   runState.routePoints = [];
   runState.lastPosition = null;
   runState.livePosition = null;
+  runState.rawPosition = null;
   runState.gpsStatus = "requesting";
   runState.gpsMessage = "현재 위치를 찾는 중입니다.";
   runState.lastGpsError = "";
@@ -354,6 +356,7 @@ function togglePause() {
     runState.status = "running";
     runState.lastPosition = null;
     runState.livePosition = null;
+    runState.rawPosition = null;
     runState.gpsStatus = "requesting";
     runState.gpsMessage = "현재 위치를 다시 찾는 중입니다.";
     runState.lastGpsError = "";
@@ -477,21 +480,25 @@ function handlePosition(position, options = {}) {
   }
 
   clearGpsRetry();
-  runState.livePosition = currentPosition;
+  runState.rawPosition = currentPosition;
   runState.lastGpsAt = Date.now();
   runState.lastGpsError = "";
+
+  if (!isAccurateEnoughForDistance(currentPosition)) {
+    runState.gpsStatus = "weak";
+    runState.gpsMessage = getGpsIgnoredMessage(currentPosition);
+    renderRun();
+    updateLiveMap();
+    return;
+  }
+
+  runState.livePosition = currentPosition;
   runState.gpsStatus = currentPosition.accuracy <= 35 ? "ready" : "weak";
   runState.gpsMessage = getGpsFixMessage(currentPosition);
 
   const shouldTrackDistance = options.trackDistance !== false && runState.status === "running";
 
   if (!shouldTrackDistance) {
-    renderRun();
-    updateLiveMap();
-    return;
-  }
-
-  if (!isAccurateEnoughForDistance(currentPosition)) {
     renderRun();
     updateLiveMap();
     return;
@@ -632,6 +639,8 @@ function renderLiveMapPlaceholder() {
 function handleGpsButton() {
   if (runState.status === "running") {
     runState.lastPosition = null;
+    runState.livePosition = null;
+    runState.rawPosition = null;
     startGps();
     return;
   }
@@ -651,6 +660,8 @@ function requestSingleGpsFix() {
   runState.gpsStatus = "requesting";
   runState.gpsMessage = "현재 위치 권한과 좌표를 확인하는 중입니다.";
   runState.lastGpsError = "";
+  runState.livePosition = null;
+  runState.rawPosition = null;
   renderRun();
   updateLiveMap();
 
@@ -1574,7 +1585,7 @@ function getDistanceMeters(from, to) {
 
 function isAccurateEnoughForDistance(position) {
   if (!position) return false;
-  return !position.accuracy || position.accuracy <= MAX_DISTANCE_ACCURACY_METERS;
+  return Number.isFinite(position.accuracy) && position.accuracy <= MAX_DISTANCE_ACCURACY_METERS;
 }
 
 function isValidPosition(position) {
@@ -1586,11 +1597,15 @@ function isStalePosition(position) {
 }
 
 function getGpsFixMessage(position) {
-  const accuracyText = Number.isFinite(position.accuracy)
-    ? `정확도 약 ${Math.round(position.accuracy)}m`
-    : "정확도 확인 중";
+  const accuracyText = formatAccuracy(position, "약 ");
 
-  return `현재 위치 수신 · ${accuracyText}`;
+  return `현재 위치 수신 · ${accuracyText} · 지도 반영`;
+}
+
+function getGpsIgnoredMessage(position) {
+  const accuracyText = formatAccuracy(position, "약 ");
+
+  return `좌표는 받았지만 ${accuracyText}라 지도에 반영하지 않았습니다.`;
 }
 
 function getGpsDetail() {
@@ -1605,18 +1620,20 @@ function getGpsDetail() {
     return `${permissionText} · ${runState.lastGpsError}`;
   }
 
-  if (!runState.livePosition) {
+  const visiblePosition = runState.livePosition || runState.rawPosition;
+
+  if (!visiblePosition) {
     return `${permissionText} · 실제 좌표를 아직 받지 못했습니다`;
   }
 
-  const accuracyText = Number.isFinite(runState.livePosition.accuracy)
-    ? `정확도 ${Math.round(runState.livePosition.accuracy)}m`
-    : "정확도 확인 중";
+  const accuracyText = formatAccuracy(visiblePosition);
+  const mapText = runState.livePosition ? "지도 반영" : "지도 미반영";
+  const coordinateText = formatCoordinates(visiblePosition);
   const receivedText = runState.lastGpsAt
     ? `${new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(runState.lastGpsAt)} 수신`
     : "방금 수신";
 
-  return `${permissionText} · ${accuracyText} · ${receivedText}`;
+  return `${permissionText} · ${mapText} · ${accuracyText} · ${coordinateText} · ${receivedText}`;
 }
 
 function getGpsErrorMessage(error) {
@@ -1646,6 +1663,10 @@ function getGpsErrorHint(status) {
 
 function getLiveMapPlaceholderMessage() {
   if (!runState.livePosition && runState.routePoints.length === 0) {
+    if (runState.rawPosition && !isAccurateEnoughForDistance(runState.rawPosition)) {
+      return `GPS 좌표를 받았지만 ${formatAccuracy(runState.rawPosition)}라 지도에 반영하지 않았습니다.`;
+    }
+
     if (runState.gpsStatus === "requesting") {
       return "현재 위치를 찾는 중입니다. 표시된 지도는 기본 위치입니다.";
     }
@@ -1662,6 +1683,16 @@ function getLiveMapPlaceholderMessage() {
   }
 
   return "";
+}
+
+function formatCoordinates(position) {
+  return `좌표 ${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`;
+}
+
+function formatAccuracy(position, prefix = "") {
+  return Number.isFinite(position?.accuracy)
+    ? `정확도 ${prefix}${Math.round(position.accuracy)}m`
+    : "정확도 확인 중";
 }
 
 function isUsefulMovement(movedMeters, currentPosition, previousPosition) {
