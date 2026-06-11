@@ -380,6 +380,7 @@ function finishRun() {
   stopTimer();
   stopGps();
   stopVoice();
+  stopMedia(true);
   releaseRunWakeLock();
   renderRun();
   renderRecords();
@@ -1091,12 +1092,14 @@ function prepareConnectedMedia(options = {}) {
 
   if (connectedMedia.kind === "audio" && mediaAudio) {
     mediaAudio.src = connectedMedia.source;
+    mediaAudio.loop = true;
     mediaAudio.hidden = false;
     mediaAudio.load();
   }
 
   if (connectedMedia.kind === "video" && mediaVideo) {
     mediaVideo.src = connectedMedia.source;
+    mediaVideo.loop = true;
     mediaVideo.hidden = false;
     mediaVideo.load();
   }
@@ -1240,7 +1243,9 @@ function getYouTubeEmbedUrl(url) {
       }
     }
 
-    return videoId ? `https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1` : "";
+    return videoId
+      ? `https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1&loop=1&playlist=${encodeURIComponent(videoId)}`
+      : "";
   } catch {
     return "";
   }
@@ -1280,8 +1285,9 @@ function announceRunProgress(isTest = false) {
   }
 
   const elapsedMs = getElapsedMs();
+  const currentTimeText = formatCurrentTimeForVoice();
   const message = isTest && elapsedMs < 1000
-    ? "음성 안내가 켜져 있습니다. 러닝 중 5분마다 거리와 시간당 속도를 알려드립니다."
+    ? `현재 시간 ${currentTimeText}. 음성 안내가 켜져 있습니다. 러닝 중 5분마다 현재 시간, 거리, 시간당 속도를 알려드립니다.`
     : getVoiceMessage(elapsedMs);
   const utterance = new SpeechSynthesisUtterance(message);
   const koreanVoice = speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("ko"));
@@ -1312,12 +1318,13 @@ function getVoiceMessage(elapsedMs) {
   const elapsedMinutes = Math.max(1, Math.floor(elapsedMs / 60000));
   const distanceKm = runState.distanceMeters / 1000;
   const speedKmh = getAverageSpeedKmh(elapsedMs, distanceKm);
+  const currentTimeText = formatCurrentTimeForVoice();
 
   if (distanceKm < 0.01) {
-    return `${elapsedMinutes}분 경과. 아직 이동 거리가 충분하지 않습니다.`;
+    return `현재 시간 ${currentTimeText}. ${elapsedMinutes}분 경과. 아직 이동 거리가 충분하지 않습니다.`;
   }
 
-  return `${elapsedMinutes}분 경과. 현재 ${distanceKm.toFixed(2)}킬로미터, 시간당 ${speedKmh.toFixed(1)}킬로미터 속도입니다.`;
+  return `현재 시간 ${currentTimeText}. ${elapsedMinutes}분 경과. 현재 ${distanceKm.toFixed(2)}킬로미터, 시간당 ${speedKmh.toFixed(1)}킬로미터 속도입니다.`;
 }
 
 function getAverageSpeedKmh(elapsedMs, distanceKm) {
@@ -1325,6 +1332,14 @@ function getAverageSpeedKmh(elapsedMs, distanceKm) {
   if (elapsedHours <= 0 || distanceKm <= 0) return 0;
 
   return distanceKm / elapsedHours;
+}
+
+function formatCurrentTimeForVoice() {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "numeric",
+    minute: "numeric",
+    hour12: true,
+  }).format(new Date());
 }
 
 function changeCalendarMonth(change) {
